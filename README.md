@@ -154,6 +154,14 @@ The version in `package.json` must match the semantic Git tag. Pushing a tag suc
 as `v1.1.0` runs the release workflow, builds revision `1`, generates a SHA-256
 checksum, and publishes both files as a GitHub Release.
 
+For fork testing, push a tag such as `v1.2.0-beta.14` from the branch to test.
+The base version must match `package.json`; the beta number becomes the SPK
+revision (`1.2.0-14`). Choose a revision higher than any installed package of the
+same version. The workflow publishes the SPK and checksum as a GitHub prerelease,
+without marking it as latest. Actions must be enabled in the fork; no additional
+secrets are needed because the publish job uses `GITHUB_TOKEN` with
+`contents: write`.
+
 ## License
 
 DiskShell is available under the [MIT License](LICENSE).
