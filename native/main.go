@@ -407,6 +407,13 @@ func cgiEnvironment(request *http.Request) []string {
 	if host == "" {
 		host = request.RemoteAddr
 	}
+	// DSM nginx overwrites X-Real-IP with the client's address. Only trust it
+	// from the local proxy, so authenticate.cgi sees the DSM login IP.
+	if peer := net.ParseIP(host); peer != nil && peer.IsLoopback() {
+		if client := net.ParseIP(request.Header.Get("X-Real-IP")); client != nil {
+			host = client.String()
+		}
+	}
 	return []string{
 		"GATEWAY_INTERFACE=CGI/1.1",
 		"PATH=/usr/syno/bin:/usr/bin:/bin",

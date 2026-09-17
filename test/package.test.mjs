@@ -63,6 +63,8 @@ test("builds a self-contained DiskShell SPK", () => {
 });
 
 test("keeps terminal authentication and transport boundaries explicit", () => {
+  const proxy = readFileSync(join(integration, "payload/nginx/diskshell.conf"), "utf8");
+  assert.match(proxy, /proxy_set_header X-Real-IP \$remote_addr;/u);
   const backend = ["main.go", "session.go", "upload.go"]
     .map((file) => readFileSync(join(integration, "native", file), "utf8"))
     .join("\n");

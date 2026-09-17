@@ -81,6 +81,32 @@ func TestCGIEnvironment(t *testing.T) {
 	}
 }
 
+func TestCGIEnvironmentPreservesProxiedClientIP(t *testing.T) {
+	for _, sample := range []struct {
+		peer, forwarded, want string
+	}{
+		{"127.0.0.1:40000", "192.0.2.3", "192.0.2.3"},
+		{"127.0.0.1:40000", "2001:db8::3", "2001:db8::3"},
+		{"[::1]:40000", "192.0.2.3", "192.0.2.3"},
+		{"192.0.2.4:40000", "192.0.2.3", "192.0.2.4"},
+		{"127.0.0.1:40000", "", "127.0.0.1"},
+		{"127.0.0.1:40000", "not-an-ip", "127.0.0.1"},
+		{"127.0.0.1:40000", "192.0.2.3, 192.0.2.4", "127.0.0.1"},
+	} {
+		t.Run(sample.peer+"/"+sample.forwarded, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://dsm.local/diskshell/ws", nil)
+			request.RemoteAddr = sample.peer
+			request.Header.Set("X-Real-IP", sample.forwarded)
+			for _, value := range cgiEnvironment(request) {
+				if value == "REMOTE_ADDR="+sample.want {
+					return
+				}
+			}
+			t.Fatalf("CGI did not receive expected client IP %q", sample.want)
+		})
+	}
+}
+
 func TestDevelopmentOverridesRequireMatchingRealAndEffectiveIdentity(t *testing.T) {
 	// This test documents the setuid boundary. The package binary has differing
 	// real/effective IDs on DSM, so the override condition must remain explicit.
