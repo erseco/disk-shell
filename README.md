@@ -169,7 +169,7 @@ Please do not test package installation on a production NAS.
 
 ## Beta releases from this fork
 
-The `hotfix/preserve-dsm-client-ip` branch is the fork's testing branch. It
+The `beta` branch is the fork's testing branch. It
 includes the current upstream features, non-administrator DSM login support,
 and the beta package workflow. Its workflow only publishes beta tags; the
 upstream PR does not include these fork-specific release changes.
@@ -184,8 +184,8 @@ To publish from your local checkout:
 
 ```sh
 git fetch origin
-git switch hotfix/preserve-dsm-client-ip
-git pull --ff-only origin hotfix/preserve-dsm-client-ip
+git switch beta
+git pull --ff-only origin beta
 git tag v1.3.0-beta.16
 git push origin v1.3.0-beta.16
 ```
