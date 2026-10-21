@@ -1,5 +1,24 @@
 # Changelog
 
+v1.3.0
+
+### Added
+
+- Live header graphs with automatically scaled one-minute histories for every logical CPU core, RAM, volume usage, fan speed, and available drive temperatures.
+- Authenticated metrics streaming over WebSocket with a shared sampler and keyboard-accessible detail panels for individual readings.
+- Responsive monitor widgets that hide from right to left as the window narrows.
+- Separate sudo shells opened with a plus-and-shield button and a localized password dialog. Sudo runs as the authenticated DSM account and applies its normal policy; the password is passed through a one-shot pipe separately from terminal input.
+- German and English labels for the new controls and dialogs.
+
+### Fixed
+
+- Closing a nonpersistent shell now terminates foreground and background jobs, including nested child sessions. Unresponsive jobs are killed after a grace period. Keeping a shell running requires explicit background persistence.
+- Stalled metrics streams reconnect without waiting for a close handshake; late socket events are ignored.
+- Temporary DSM authentication lookup failures retry without being treated as revoked sessions.
+- Metric details reposition on resize and close when their widget is hidden.
+- Monotonic graph timing, stream identity, and sequence numbers handle clock corrections and service restarts; reconnect gaps remain visible.
+- Hidden monitors suspend their connections, and sampling pauses when no monitors are subscribed.
+
 v1.2.0
 
 - Fixed Escape handling so closing terminal search does not close the DSM window.

@@ -18,6 +18,8 @@ import type { Messages } from "../i18n.js";
 import type { ConnectionState, SessionInfo } from "../types.js";
 import { statusBarComponent } from "./status-bar.js";
 
+import { systemMonitorComponent } from "./system-monitor.js";
+
 const maxTabs = 4;
 
 type ShellTab = {
@@ -25,6 +27,8 @@ type ShellTab = {
   sessionId: string;
   title: string;
   persistent: boolean;
+  sudo: boolean;
+  password?: string;
   processState: "running" | "exited";
   connectionState: ConnectionState;
   errorMessage: string;
@@ -50,6 +54,8 @@ type TerminalView = {
   sessionsOpen: boolean;
   searchOpen: boolean;
   pendingCloseTab: ShellTab | null;
+  sudoDialog: boolean;
+  sudoPassword: string;
   notice: string;
   noticeTimer: number | null;
   renamingTabId: number | null;
@@ -72,6 +78,7 @@ type TerminalView = {
   dragEventHandler: ((event: DragEvent) => void) | null;
   $refs: {
     shell: HTMLElement;
+    sudoPassword?: HTMLInputElement;
     actions: HTMLElement;
     searchInput?: HTMLInputElement;
     toolbarTooltip?: HTMLElement;
@@ -81,7 +88,10 @@ type TerminalView = {
   $nextTick(callback: () => void): void;
   activeTab: ShellTab | null;
   restoreSessions(): Promise<void>;
-  addTab(session?: SessionInfo): void;
+  addTab(session?: SessionInfo, sudo?: boolean, password?: string): void;
+  requestSudo(): void;
+  cancelSudo(): void;
+  submitSudo(): void;
   switchTab(tabId: number): void;
   initializeTab(tabId: number): void;
   connectTab(tab: ShellTab): void;
@@ -119,12 +129,13 @@ type TerminalView = {
 };
 
 export const terminalViewComponent = {
-  components: { "terminal-status-bar": statusBarComponent },
+  components: { "terminal-status-bar": statusBarComponent, "system-monitor": systemMonitorComponent },
   template: [
     '<section ref="shell" class="diskshell-shell">',
     '  <header class="diskshell-toolbar">',
     '    <div><strong>DiskShell</strong><span>{{ text.subtitle }}</span></div>',
     '    <div ref="actions" class="diskshell-actions" role="toolbar" :aria-label="text.toolbarLabel" @mouseover="showToolbarTooltip" @focusin="showToolbarTooltip" @mouseleave="hideToolbarTooltip" @focusout="hideToolbarTooltip">',
+    '      <system-monitor></system-monitor>',
     '      <div class="diskshell-action-group">',
     '        <button type="button" class="sessions" v-if="backgroundSessions.length" :aria-label="text.sessions" :data-tooltip="text.sessionsTooltip" @click="sessionsOpen = !sessionsOpen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01"/></svg><span class="diskshell-action-badge">{{ backgroundSessions.length }}</span></button>',
     '        <button type="button" v-if="activeTab" :aria-label="text.search" :data-tooltip="text.searchTooltip" @click="openSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg></button>',
@@ -155,6 +166,7 @@ export const terminalViewComponent = {
     `      <button type="button" class="diskshell-tab-close" :aria-label="text.closeTab + ': ' + tab.title" @click.stop="requestCloseTab(tab)">×</button>`,
     '    </div>',
     '    <button type="button" class="diskshell-new-tab" :aria-label="text.newTab" :title="text.newTab" :disabled="tabs.length >= 4" @click="addTab()">+</button>',
+    '    <button type="button" class="diskshell-new-tab diskshell-new-sudo" :aria-label="text.newSudoTab" :title="text.sudoTabTooltip" :disabled="tabs.length >= 4" @click="requestSudo"><span class="sudo-plus" aria-hidden="true">+</span><svg class="sudo-shield" viewBox="0 0 16 16" aria-hidden="true"><path d="m8 1 6 2v5c0 4-6 7-6 7s-6-3-6-7V3z"/></svg></button>',
     '  </nav>',
     '  <aside v-if="sessionsOpen" class="diskshell-session-panel" :aria-label="text.sessions">',
     '    <header><strong>{{ text.backgroundSessions }}</strong><button type="button" @click="sessionsOpen = false">×</button></header>',
@@ -206,6 +218,15 @@ export const terminalViewComponent = {
     '      </div>',
     '    </div>',
     '  </div>',
+    '  <div v-if="sudoDialog" class="diskshell-dialog-backdrop" @keydown.esc.stop.prevent="cancelSudo">',
+    '    <form class="diskshell-dialog diskshell-sudo-dialog" role="dialog" aria-modal="true" :aria-label="text.sudoDialogTitle" @submit.prevent="submitSudo">',
+    '      <div class="sudo-dialog-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 8 3v6c0 6-8 11-8 11S4 17 4 11V5z"/></svg><strong>{{ text.sudoDialogTitle }}</strong></div>',
+    '      <p>{{ text.sudoDialogDescription }}</p>',
+    '      <label for="diskshell-sudo-password">{{ text.sudoPasswordLabel }}</label>',
+    '      <input id="diskshell-sudo-password" ref="sudoPassword" v-model="sudoPassword" type="password" autocomplete="off" maxlength="4096" :placeholder="text.sudoPasswordPlaceholder" @keydown.shift.tab.prevent="$refs.sudoSubmit.focus()">',
+    '      <div class="sudo-dialog-actions"><button ref="sudoCancel" type="button" @click="cancelSudo">{{ text.cancel }}</button><button ref="sudoSubmit" type="submit" class="primary" @keydown.tab.exact.prevent="$refs.sudoPassword.focus()">{{ text.sudoOpen }}</button></div>',
+    '    </form>',
+    '  </div>',
     '</section>',
   ].join(""),
   data() {
@@ -222,6 +243,8 @@ export const terminalViewComponent = {
       sessionsOpen: false,
       searchOpen: false,
       pendingCloseTab: null as ShellTab | null,
+      sudoDialog: false,
+      sudoPassword: "",
       notice: "",
       noticeTimer: null as number | null,
       renamingTabId: null as number | null,
@@ -295,6 +318,7 @@ export const terminalViewComponent = {
     if (this.fitFrame !== null) cancelAnimationFrame(this.fitFrame);
     if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
     for (const tab of this.tabs) {
+      tab.password = undefined;
       tab.terminalSocket?.disconnect();
       tab.terminal?.dispose();
     }
@@ -318,7 +342,24 @@ export const terminalViewComponent = {
         this.backgroundSessions = [];
       }
     },
-    addTab(this: TerminalView, session?: SessionInfo): void {
+    requestSudo(this: TerminalView): void {
+      if (this.tabs.length >= maxTabs) return;
+      this.sudoPassword = "";
+      this.sudoDialog = true;
+      this.$nextTick(() => this.$refs.sudoPassword?.focus());
+    },
+    cancelSudo(this: TerminalView): void {
+      this.sudoPassword = "";
+      this.sudoDialog = false;
+      this.$nextTick(() => this.$refs.shell.querySelector<HTMLButtonElement>(".diskshell-new-sudo")?.focus());
+    },
+    submitSudo(this: TerminalView): void {
+      const password = this.sudoPassword;
+      this.sudoPassword = "";
+      this.sudoDialog = false;
+      this.addTab(undefined, true, password);
+    },
+    addTab(this: TerminalView, session?: SessionInfo, sudo = false, password?: string): void {
       const existing = session && this.tabs.find((tab) => tab.sessionId === session.id);
       if (existing) {
         this.switchTab(existing.id);
@@ -330,8 +371,10 @@ export const terminalViewComponent = {
       this.tabs.push({
         id,
         sessionId: session?.id || "",
-        title: session?.name || `${this.text.tabTitle} ${id}`,
+        title: session?.name || `${sudo ? this.text.sudoTabTitle : this.text.tabTitle} ${id}`,
         persistent: session?.persistent || false,
+        sudo: session?.sudo || sudo,
+        password,
         processState: session?.state || "running",
         connectionState: "connecting",
         errorMessage: "",
@@ -463,7 +506,7 @@ export const terminalViewComponent = {
       tab.terminal?.clear();
       tab.terminal?.write(`\x1b[38;5;81mDiskShell\x1b[0m – ${this.text.connectingTerminal}\r\n`);
       const terminalSocket = new TerminalSocket(
-        { sessionId: tab.sessionId || undefined, name: tab.title },
+        { sessionId: tab.sessionId || undefined, name: tab.title, sudo: tab.sudo, password: tab.password },
         {
           onSession: (session) => {
             if (tab.terminalSocket !== terminalSocket) return;
@@ -471,6 +514,7 @@ export const terminalViewComponent = {
             tab.sessionId = session.id;
             tab.title = session.name;
             tab.persistent = session.persistent;
+            tab.sudo = session.sudo;
             tab.processState = session.state;
             if (changed) {
               this.showNotice(session.persistent ? this.text.sessionPinned : this.text.sessionUnpinned);
@@ -503,6 +547,7 @@ export const terminalViewComponent = {
           },
         },
       );
+      tab.password = undefined;
       tab.terminalSocket = terminalSocket;
       terminalSocket.connect();
     },

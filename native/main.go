@@ -46,6 +46,8 @@ type clientMessage struct {
 	SessionID  string `json:"sessionId,omitempty"`
 	Name       string `json:"name,omitempty"`
 	Persistent bool   `json:"persistent,omitempty"`
+	Sudo       bool   `json:"sudo,omitempty"`
+	Password   string `json:"password,omitempty"`
 	Cols       uint16 `json:"cols,omitempty"`
 	Rows       uint16 `json:"rows,omitempty"`
 }
@@ -79,8 +81,12 @@ func main() {
 		log.Fatal("diskshell-server must be installed with its DSM setuid privilege")
 	}
 
+	metricsContext, stopMetrics := context.WithCancel(context.Background())
+	defer stopMetrics()
+	go metricsService.run(metricsContext)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/diskshell/health", health)
+	mux.HandleFunc("/diskshell/metrics", metricsIndex)
 	mux.HandleFunc("/diskshell/sessions", sessionIndex)
 	mux.HandleFunc("/diskshell/uploads", uploadIndex)
 	mux.HandleFunc("/diskshell/uploads/check", uploadCheckIndex)
@@ -96,6 +102,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
+		stopMetrics()
 		sessionStore.shutdown()
 		_ = server.Close()
 	}()
@@ -162,7 +169,8 @@ func terminal(response http.ResponseWriter, request *http.Request) {
 		_ = connection.WriteJSON(serverMessage{Type: "error", Code: "invalid_open", Message: "The terminal session could not be opened."})
 		return
 	}
-	session, attachment, snapshot, err := sessionStore.open(account, firstMessage.SessionID, firstMessage.Name)
+	session, attachment, snapshot, err := sessionStore.open(account, firstMessage.SessionID, firstMessage.Name, firstMessage.Sudo, firstMessage.Password)
+	firstMessage.Password = ""
 	if err != nil {
 		code := "session_not_found"
 		message := "The terminal session is no longer available."
@@ -286,6 +294,8 @@ func sessionIndex(response http.ResponseWriter, request *http.Request) {
 	_ = json.NewEncoder(response).Encode(serverMessage{Type: "sessions", Sessions: sessionStore.list(account.username)})
 }
 
+var errSessionDenied = errors.New("DSM session denied")
+
 var errServiceBusy = errors.New("terminal service is busy")
 
 func authenticateWithSlot(request *http.Request) (*identity, error) {
@@ -325,7 +335,7 @@ func authenticateContext(ctx context.Context, request *http.Request) (*identity,
 	}
 	username := strings.TrimSpace(string(output))
 	if !validUsername(username) {
-		return nil, errors.New("DSM session lookup returned no valid account")
+		return nil, fmt.Errorf("%w: no valid account", errSessionDenied)
 	}
 	account, err := user.Lookup(username)
 	if err != nil {

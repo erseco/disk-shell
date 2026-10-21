@@ -23,8 +23,27 @@ terminal port on the network.
   explicitly enabled for the current DiskShell window.
 - **DSM-native authentication** — requires a valid DSM session and
   starts the shell under the authenticated DSM account.
+- **Live system monitor** — automatically scaled one-minute histories per logical CPU core and for
+  RAM usage, the fullest NAS volume, fastest fan, and hottest drive sensor;
+  values stream every two seconds over an authenticated WebSocket. Click a widget
+  for scrollable individual readings. A shared sampler avoids per-window polling;
+  DSM sessions are revalidated every minute; temporary lookup failures reconnect with backoff.
+  A monotonic graph clock and sample sequence numbers tolerate NAS clock corrections.
+  History resets on service restart and otherwise survives reconnects
+  and shows gaps where no readings were collected. Hidden monitors suspend their
+  connections, and sampling pauses when no monitors are subscribed.
+  Fans and disk temperatures require readable Linux hwmon sensors; unsupported
+  hardware (including VirtualDSM) shows an unavailable indicator.
 - **Responsive toolbar** — accessible icon controls, state-aware tooltips, and a
-  compact layout that adapts to the DSM window.
+  compact layout that adapts to the DSM window. Monitor widgets disappear from
+  right to left as the window narrows: drive temperature, fans, volume usage,
+  RAM, then CPU.
+
+Sudo shells can be opened with **plus with shield** beside the new-tab button. DiskShell
+starts sudo as the authenticated DSM account; sudo applies its normal policy.
+The password dialog sends the credential over the authenticated connection to a
+one-shot stdin pipe for sudo, separately from terminal input. Background persistence
+is opt-in for these tabs too. File uploads still use the DSM account permissions.
 
 ## Installation
 
@@ -151,8 +170,19 @@ Please do not test package installation on a production NAS.
 ## Releases
 
 The version in `package.json` must match the semantic Git tag. Pushing a tag such
-as `v1.1.0` runs the release workflow, builds revision `1`, generates a SHA-256
+as `v1.3.0` runs the release workflow, builds revision `1`, generates a SHA-256
 checksum, and publishes both files as a GitHub Release.
+
+Before tagging a release:
+
+1. Update `package.json`, `package-lock.json`, and `CHANGELOG.md` together.
+2. Run `npm ci`, `npm run check`, and `npm test` (including the native tests on Linux).
+3. Build with `DISKSHELL_PACKAGE_REVISION=1 npm run build` and verify the SPK on a disposable DSM system.
+4. Commit the release preparation, then create and push the matching version tag when ready to publish.
+
+The default package revision is `1`; use a higher explicit revision for subsequent
+builds installed under the same version. Updating the package restarts its service
+and ends all active shells, including background sessions.
 
 ## License
 

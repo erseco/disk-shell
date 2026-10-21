@@ -28,6 +28,7 @@ type sessionInfo struct {
 	Name         string `json:"name"`
 	State        string `json:"state"`
 	Persistent   bool   `json:"persistent"`
+	Sudo         bool   `json:"sudo"`
 	Attached     bool   `json:"attached"`
 	LastActivity string `json:"lastActivity"`
 }
@@ -51,10 +52,10 @@ type shellSession struct {
 	name         string
 	command      *exec.Cmd
 	terminalFile *os.File
+	sudo         bool
 	persistent   bool
 	running      bool
 	terminating  bool
-	reaping      bool
 	killFinished chan struct{}
 	finished     chan struct{}
 	output       []byte
@@ -78,7 +79,7 @@ var resolveProcessWorkingDirectory = func(processID int) (string, error) {
 	return os.Readlink("/proc/" + strconv.Itoa(processID) + "/cwd")
 }
 
-func (manager *sessionManager) open(account *identity, sessionID, name string) (*shellSession, *sessionAttachment, []byte, error) {
+func (manager *sessionManager) open(account *identity, sessionID, name string, sudo bool, password string) (*shellSession, *sessionAttachment, []byte, error) {
 	if sessionID != "" {
 		session := manager.find(account.username, sessionID)
 		if session == nil {
@@ -87,7 +88,7 @@ func (manager *sessionManager) open(account *identity, sessionID, name string) (
 		attachment, snapshot := session.attach()
 		return session, attachment, snapshot, nil
 	}
-	session, err := manager.create(account, name)
+	session, err := manager.create(account, name, sudo, password)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -95,7 +96,10 @@ func (manager *sessionManager) open(account *identity, sessionID, name string) (
 	return session, attachment, snapshot, nil
 }
 
-func (manager *sessionManager) create(account *identity, name string) (*shellSession, error) {
+func (manager *sessionManager) create(account *identity, name string, sudo bool, password string) (*shellSession, error) {
+	if len(password) > 4096 || strings.ContainsAny(password, "\r\n\x00") {
+		return nil, errors.New("invalid sudo credential")
+	}
 	if !manager.reserve(account.username) {
 		return nil, errServiceBusy
 	}
@@ -112,25 +116,8 @@ func (manager *sessionManager) create(account *identity, name string) (*shellSes
 	if !validSessionName(name) {
 		name = "Shell"
 	}
-	command := exec.Command("/bin/sh", "-l")
-	command.Dir = account.home
-	command.Env = []string{
-		"HOME=" + account.home,
-		"LANG=C.UTF-8",
-		"LOGNAME=" + account.username,
-		"PATH=/usr/local/bin:/usr/bin:/bin:/usr/syno/bin:/usr/syno/sbin",
-		"SHELL=/bin/sh",
-		"TERM=xterm-256color",
-		"USER=" + account.username,
-	}
-	command.SysProcAttr = &syscall.SysProcAttr{}
-	// The installed setuid service must always drop to the authenticated DSM
-	// account. Unprivileged development tests already run as that account and
-	// cannot call setgroups, even when the requested groups are unchanged.
-	if credential := commandCredential(account); credential != nil {
-		command.SysProcAttr.Credential = credential
-	}
-	terminalFile, err := pty.StartWithSize(command, &pty.Winsize{Cols: 120, Rows: 36})
+	command := sessionCommand(account, sudo)
+	terminalFile, err := startSessionCommand(command, sudo, password)
 	if err != nil {
 		releaseSlot(shellSlots)
 		manager.releaseReservation(account.username)
@@ -140,6 +127,7 @@ func (manager *sessionManager) create(account *identity, name string) (*shellSes
 		manager:      manager,
 		id:           identifier,
 		owner:        account.username,
+		sudo:         sudo,
 		name:         name,
 		command:      command,
 		terminalFile: terminalFile,
@@ -325,6 +313,7 @@ func (session *shellSession) infoLocked() sessionInfo {
 		Name:         session.name,
 		State:        state,
 		Persistent:   session.persistent,
+		Sudo:         session.sudo,
 		Attached:     session.attachment != nil,
 		LastActivity: session.lastActivity.UTC().Format(time.RFC3339),
 	}
@@ -403,11 +392,11 @@ func (session *shellSession) run() {
 			break
 		}
 	}
+	// Even a shell that exits on its own can leave background jobs behind.
+	// Keep its PID/SID reserved until all job groups have been signalled.
+	session.terminate()
 	session.mu.Lock()
 	killFinished := session.killFinished
-	if killFinished == nil {
-		session.reaping = true
-	}
 	session.mu.Unlock()
 	if killFinished != nil {
 		<-killFinished
@@ -454,7 +443,7 @@ func (session *shellSession) finish() {
 
 func (session *shellSession) terminate() {
 	session.mu.Lock()
-	if !session.running || session.terminating || session.reaping {
+	if !session.running || session.terminating {
 		session.persistent = false
 		running := session.running
 		session.mu.Unlock()
@@ -470,11 +459,7 @@ func (session *shellSession) terminate() {
 	processID := session.command.Process.Pid
 	session.mu.Unlock()
 	go func() {
-		_ = syscall.Kill(-processID, syscall.SIGTERM)
-		<-time.After(2 * time.Second)
-		// run deliberately keeps the process leader unreaped until this final
-		// group signal, preventing its process-group ID from being reused.
-		_ = syscall.Kill(-processID, syscall.SIGKILL)
+		terminateShellProcesses(processID)
 		close(killFinished)
 	}()
 }
@@ -508,4 +493,57 @@ func randomSessionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// sudo starts as the DSM account and performs its own terminal authentication.
+func sessionCommand(account *identity, sudo bool) *exec.Cmd {
+	command := exec.Command("/bin/sh", "-l")
+	if sudo {
+		command = exec.Command("/usr/bin/sudo", "-S", "-k", "-H", "-p", "", "--", "/bin/sh", "-c", `cd "$HOME" && exec /bin/sh -l </dev/tty`)
+	}
+	command.Dir = account.home
+	command.Env = []string{
+		"HOME=" + account.home,
+		"LANG=C.UTF-8",
+		"LOGNAME=" + account.username,
+		"PATH=/usr/local/bin:/usr/bin:/bin:/usr/syno/bin:/usr/syno/sbin",
+		"SHELL=/bin/sh",
+		"TERM=xterm-256color",
+		"USER=" + account.username,
+	}
+	command.SysProcAttr = &syscall.SysProcAttr{}
+	// The installed setuid service must always drop to the authenticated DSM
+	// account. Unprivileged development tests already run as that account and
+	// cannot call setgroups, even when the requested groups are unchanged.
+	if credential := commandCredential(account); credential != nil {
+		command.SysProcAttr.Credential = credential
+	}
+	return command
+}
+
+// Passwords enter sudo through a dedicated, one-shot pipe, never the PTY.
+// The root shell switches stdin to /dev/tty, so even NOPASSWD cannot turn a
+// supplied password into shell input. stderr/stdout still use the terminal.
+func startSessionCommand(command *exec.Cmd, sudo bool, password string) (*os.File, error) {
+	if !sudo {
+		return pty.StartWithSize(command, &pty.Winsize{Cols: 120, Rows: 36})
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	defer writer.Close()
+	command.Stdin = reader
+	command.SysProcAttr.Ctty = 1
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Cols: 120, Rows: 36})
+	if err != nil {
+		return nil, err
+	}
+	credential := []byte(password + "\n")
+	_, _ = writer.Write(credential)
+	for i := range credential {
+		credential[i] = 0
+	}
+	return terminal, nil
 }
