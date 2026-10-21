@@ -10,12 +10,13 @@ const validation = workflow.split("      - name: Validate release tag\n")[1]
   .split("        run: |\n")[1].split("\n      - name:")[0]
   .replace(/^          /gm, "");
 
-test("release tags select stable or beta package revisions and reject invalid versions", () => {
+test("fork beta tags select package revisions and reject stable or invalid tags", () => {
   const directory = mkdtempSync(join(tmpdir(), "diskshell-release-"));
   const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url))).version;
   try {
-    for (const [tag, revision] of [[`v${version}`, "1"], [`v${version}-beta.14`, "14"],
-      [`v${version}-beta.0`, null], [`v${version}-rc.1`, null], ["v0.0.0", null]]) {
+    for (const [tag, revision] of [[`v${version}-beta.16`, "16"], [`v${version}-beta.14`, "14"],
+      [`v${version}`, null], [`v${version}-beta.0`, null],
+      [`v${version}-rc.1`, null], ["v0.0.0-beta.16", null]]) {
       const envPath = join(directory, tag);
       const result = spawnSync("bash", ["-c", validation], {
         cwd: new URL("..", import.meta.url),

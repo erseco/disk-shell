@@ -12,6 +12,8 @@ export interface TerminalSocketEvents {
 export interface TerminalSocketOptions {
   sessionId?: string;
   name: string;
+  sudo?: boolean;
+  password?: string;
 }
 
 export type UploadCollision = "ask" | "override" | "keep-both";
@@ -32,7 +34,8 @@ export class TerminalSocket {
   ) {}
 
   connect(): void {
-    this.disconnect();
+    this.socket?.close(1000, "Reconnecting");
+    this.socket = null;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = currentSynoToken();
     const protocols = token ? [synoTokenSubprotocol(token)] : undefined;
@@ -40,14 +43,17 @@ export class TerminalSocket {
     this.socket = socket;
     this.ready = false;
     socket.addEventListener("open", () => {
-      this.send({ type: "open", sessionId: this.options.sessionId, name: this.options.name });
+      if (this.socket !== socket) return;
+      this.send({ type: "open", sessionId: this.options.sessionId, name: this.options.name, sudo: this.options.sudo, password: this.options.password });
+      this.options.password = undefined;
     });
-    socket.addEventListener("close", () => this.events.onClose());
-    socket.addEventListener("error", () => this.events.onError(messages.connectionFailed));
-    socket.addEventListener("message", (event) => this.receive(event.data));
+    socket.addEventListener("close", () => { if (this.socket !== socket) return; this.options.password = undefined; this.events.onClose(); });
+    socket.addEventListener("error", () => { if (this.socket === socket) { this.options.password = undefined; this.events.onError(messages.connectionFailed); } });
+    socket.addEventListener("message", (event) => { if (this.socket === socket) this.receive(event.data); });
   }
 
   disconnect(): void {
+    this.options.password = undefined;
     this.socket?.close(1000, "Terminal window closed");
     this.socket = null;
     this.ready = false;
@@ -181,14 +187,14 @@ function uploadFile(
   });
 }
 
-function sessionFetch(path: string, init: RequestInit): Promise<Response> {
+export function sessionFetch(path: string, init: RequestInit): Promise<Response> {
   const token = currentSynoToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("X-Syno-Token", token);
   return fetch(path, { ...init, credentials: "same-origin", headers });
 }
 
-function synoTokenSubprotocol(value: string): string {
+export function synoTokenSubprotocol(value: string): string {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -196,7 +202,7 @@ function synoTokenSubprotocol(value: string): string {
   return `diskshell.syno-token.${encoded}`;
 }
 
-function currentSynoToken(): string {
+export function currentSynoToken(): string {
   const scripts = Array.from(document.scripts);
   const source = document.currentScript?.getAttribute("src")
     || scripts.reverse().find((script) => script.src.includes("DiskShell-"))?.src

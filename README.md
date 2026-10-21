@@ -23,8 +23,27 @@ terminal port on the network.
   explicitly enabled for the current DiskShell window.
 - **DSM-native authentication** — requires a valid DSM session and
   starts the shell under the authenticated DSM account.
+- **Live system monitor** — automatically scaled one-minute histories per logical CPU core and for
+  RAM usage, the fullest NAS volume, fastest fan, and hottest drive sensor;
+  values stream every two seconds over an authenticated WebSocket. Click a widget
+  for scrollable individual readings. A shared sampler avoids per-window polling;
+  DSM sessions are revalidated every minute; temporary lookup failures reconnect with backoff.
+  A monotonic graph clock and sample sequence numbers tolerate NAS clock corrections.
+  History resets on service restart and otherwise survives reconnects
+  and shows gaps where no readings were collected. Hidden monitors suspend their
+  connections, and sampling pauses when no monitors are subscribed.
+  Fans and disk temperatures require readable Linux hwmon sensors; unsupported
+  hardware (including VirtualDSM) shows an unavailable indicator.
 - **Responsive toolbar** — accessible icon controls, state-aware tooltips, and a
-  compact layout that adapts to the DSM window.
+  compact layout that adapts to the DSM window. Monitor widgets disappear from
+  right to left as the window narrows: drive temperature, fans, volume usage,
+  RAM, then CPU.
+
+Sudo shells can be opened with **plus with shield** beside the new-tab button. DiskShell
+starts sudo as the authenticated DSM account; sudo applies its normal policy.
+The password dialog sends the credential over the authenticated connection to a
+one-shot stdin pipe for sudo, separately from terminal input. Background persistence
+is opt-in for these tabs too. File uploads still use the DSM account permissions.
 
 ## Installation
 
@@ -148,19 +167,40 @@ and privilege boundaries.
 
 Please do not test package installation on a production NAS.
 
-## Releases
+## Beta releases from this fork
 
-The version in `package.json` must match the semantic Git tag. Pushing a tag such
-as `v1.1.0` runs the release workflow, builds revision `1`, generates a SHA-256
-checksum, and publishes both files as a GitHub Release.
+The `hotfix/preserve-dsm-client-ip` branch is the fork's testing branch. It
+includes the current upstream features, non-administrator DSM login support,
+and the beta package workflow. Its workflow only publishes beta tags; the
+upstream PR does not include these fork-specific release changes.
 
-For fork testing, push a tag such as `v1.2.0-beta.14` from the branch to test.
-The base version must match `package.json`; the beta number becomes the SPK
-revision (`1.2.0-14`). Choose a revision higher than any installed package of the
-same version. The workflow publishes the SPK and checksum as a GitHub prerelease,
-without marking it as latest. Actions must be enabled in the fork; no additional
-secrets are needed because the publish job uses `GITHUB_TOKEN` with
-`contents: write`.
+For example, with `package.json` at version `1.3.0`, publishing
+`v1.3.0-beta.16` from this branch builds `DiskShell-1.3.0-16.spk` and a
+SHA-256 checksum. The beta suffix becomes the numeric DSM package revision,
+which must be higher than the revision already installed for version 1.3.0.
+Choose a unique beta number for each build.
+
+To publish from your local checkout:
+
+```sh
+git fetch origin
+git switch hotfix/preserve-dsm-client-ip
+git pull --ff-only origin hotfix/preserve-dsm-client-ip
+git tag v1.3.0-beta.16
+git push origin v1.3.0-beta.16
+```
+
+The tagged commit must contain this beta release workflow and its base
+version must match `package.json`. Pushing the branch alone does not publish
+an SPK. With Actions enabled in your fork, GitHub builds and tests the tag,
+then publishes the package and checksum as a prerelease at
+[the fork's releases](https://github.com/erseco/disk-shell/releases).
+Beta packages do not replace the latest stable release.
+
+Before tagging, run `npm ci`, `npm run check`, and `npm test`. To make a
+local test build matching the example tag, run
+`DISKSHELL_PACKAGE_REVISION=16 npm run build`. Install only on a suitable test
+NAS first. Updating DiskShell restarts its service and ends active shells.
 
 ## License
 

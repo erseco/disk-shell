@@ -1,7 +1,7 @@
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
 export type ClientMessage =
-  | { type: "open"; sessionId?: string; name?: string }
+  | { type: "open"; sessionId?: string; name?: string; sudo?: boolean; password?: string }
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "persist"; persistent: boolean }
@@ -13,6 +13,7 @@ export type SessionInfo = {
   name: string;
   state: "running" | "exited";
   persistent: boolean;
+  sudo: boolean;
   attached: boolean;
   lastActivity: string;
 };
